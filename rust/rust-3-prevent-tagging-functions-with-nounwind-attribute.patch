@@ -1,0 +1,29 @@
+From ceda5751d2559d5555b978b541400313b4f70c94 Mon Sep 17 00:00:00 2001
+From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
+Date: Fri, 9 Aug 2024 17:44:25 -0400
+Subject: [PATCH] Prevent tagging functions with `nounwind` attribute.
+
+---
+ compiler/rustc_codegen_llvm/src/abi.rs | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/compiler/rustc_codegen_llvm/src/abi.rs b/compiler/rustc_codegen_llvm/src/abi.rs
+index 6e3a4cae2f6..39ccd10054b 100644
+--- a/compiler/rustc_codegen_llvm/src/abi.rs
++++ b/compiler/rustc_codegen_llvm/src/abi.rs
+@@ -441,9 +441,9 @@ fn apply_attrs_llfn(&self, cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value) {
+         if self.ret.layout.abi.is_uninhabited() {
+             func_attrs.push(llvm::AttributeKind::NoReturn.create_attr(cx.llcx));
+         }
+-        if !self.can_unwind {
+-            func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(cx.llcx));
+-        }
++        // if !self.can_unwind {
++        //     func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(cx.llcx));
++        // }
+         if let Conv::RiscvInterrupt { kind } = self.conv {
+             func_attrs.push(llvm::CreateAttrStringValue(cx.llcx, "interrupt", kind.as_str()));
+         }
+-- 
+2.39.3 (Apple Git-146)
+

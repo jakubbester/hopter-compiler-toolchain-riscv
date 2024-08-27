@@ -1,0 +1,269 @@
+From 81998d1e79d664f23105b8c193cf2dc43df03a46 Mon Sep 17 00:00:00 2001
+From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
+Date: Sat, 27 Jan 2024 20:14:59 -0500
+Subject: [PATCH] Implement segmented stack for ARMv7em.
+
+---
+ lld/ELF/Arch/ARM.cpp                     |   7 +
+ llvm/lib/Target/ARM/ARMFrameLowering.cpp | 159 ++++++++++++++++++++++-
+ llvm/lib/Target/ARM/ARMInstrInfo.td      |   4 +
+ llvm/lib/Target/ARM/ARMInstrThumb.td     |   5 +
+ 4 files changed, 172 insertions(+), 3 deletions(-)
+
+diff --git a/lld/ELF/Arch/ARM.cpp b/lld/ELF/Arch/ARM.cpp
+index c10ffebc1666..39ca199fb4e7 100644
+--- a/lld/ELF/Arch/ARM.cpp
++++ b/lld/ELF/Arch/ARM.cpp
+@@ -48,6 +48,8 @@ public:
+   bool inBranchRange(RelType type, uint64_t src, uint64_t dst) const override;
+   void relocate(uint8_t *loc, const Relocation &rel,
+                 uint64_t val) const override;
++  bool adjustPrologueForCrossSplitStack(uint8_t *loc, uint8_t *end,
++                                        uint8_t stOther) const override;
+ };
+ enum class CodeState { Data = 0, Thumb = 2, Arm = 4 };
+ } // namespace
+@@ -1455,6 +1457,11 @@ template <typename ELFT> void elf::writeARMCmseImportLib() {
+           "': " + toString(std::move(e)));
+ }
+ 
++bool ARM::adjustPrologueForCrossSplitStack(uint8_t *loc, uint8_t *end,
++                                           uint8_t stOther) const {
++  return true;
++}
++
+ TargetInfo *elf::getARMTargetInfo() {
+   static ARM target;
+   return &target;
+diff --git a/llvm/lib/Target/ARM/ARMFrameLowering.cpp b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
+index 650f4650eef0..dc4079f9055a 100644
+--- a/llvm/lib/Target/ARM/ARMFrameLowering.cpp
++++ b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
+@@ -161,6 +161,8 @@
+ #include <utility>
+ #include <vector>
+ 
++#include <iostream>
++
+ #define DEBUG_TYPE "arm-frame-lowering"
+ 
+ using namespace llvm;
+@@ -2969,8 +2971,10 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+   // android/linux. Note that thumb1/thumb2 are support for android/linux.
+   if (MF.getFunction().isVarArg())
+     report_fatal_error("Segmented stacks do not support vararg functions.");
+-  if (!ST->isTargetAndroid() && !ST->isTargetLinux())
+-    report_fatal_error("Segmented stacks not supported on this platform.");
++
++  // Supress target checking.
++  // if (!ST->isTargetAndroid() && !ST->isTargetLinux())
++  //   report_fatal_error("Segmented stacks not supported on this platform.");
+ 
+   MachineFrameInfo &MFI = MF.getFrameInfo();
+   MachineModuleInfo &MMI = MF.getMMI();
+@@ -2981,7 +2985,11 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+   ARMFunctionInfo *ARMFI = MF.getInfo<ARMFunctionInfo>();
+   DebugLoc DL;
+ 
+-  if (!MFI.needsSplitStackProlog())
++  // Substitute for the following condition.
++  // When all functions are compiled with segmented stack, we won't
++  // encounter tail call problem. We can safely skip generating the
++  // prologue for functions that don't allocate stack space.
++  if (MFI.getStackSize() == 0)
+     return;
+ 
+   uint64_t StackSize = MFI.getStackSize();
+@@ -3049,6 +3057,8 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+   // boundary directly to the value of the stack pointer, per gcc.
+   bool CompareStackPointer = AlignedStackSize < kSplitStackAvailable;
+ 
++#if false
++
+   // We will use two of the callee save registers as scratch registers so we
+   // need to save those registers onto the stack.
+   // We will use SR0 to hold stack limit and SR1 to hold the stack size
+@@ -3393,6 +3403,149 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+         .addCFIIndex(CFIIndex);
+   }
+ 
++#else
++
++  // If r12 is live, preserve its original value before using it as the
++  // scratch register.
++  if (GetMBB->isLiveIn(ARM::R12)) {
++    BuildMI(GetMBB, DL, TII.get(ARM::t2STR_PRE), ARM::SP)
++        .addReg(ARM::R12)
++        .addReg(ARM::SP)
++        .addImm(-4)
++        .add(predOps(ARMCC::AL));
++  }
++
++  // mov r12, 0x20000000
++  BuildMI(GetMBB, DL, TII.get(ARM::t2MOVi), ARM::R12)
++      .addImm(0x20000000)
++      .add(predOps(ARMCC::AL))
++      .addReg(ARM::NoRegister)
++      .addReg(ARM::NoRegister);
++
++  // ldr r12, [r12]
++  BuildMI(GetMBB, DL, TII.get(ARM::t2LDRi12), ARM::R12)
++      .addReg(ARM::R12)
++      .addImm(0)
++      .add(predOps(ARMCC::AL));
++
++  // sub r12, sp, r12 ; r12 now holds remaining stacklet space
++  BuildMI(GetMBB, DL, TII.get(ARM::t2SUBrs), ARM::R12)
++      .addReg(ARM::SP)
++      .addReg(ARM::R12)
++      .addImm(ARM_AM::lsl)
++      .addImm(ARMCC::AL)
++      .addImm(0)
++      .addReg(ARM::CPSR, RegState::Define);
++
++  if (AlignedStackSize < 1024) {
++    // cmp r12, #func_stack_size  (stack size < 1024 and is multiple of 4)
++    BuildMI(GetMBB, DL, TII.get(ARM::t2CMPri))
++        .addReg(ARM::R12)
++        .addImm(AlignedStackSize)
++        .add(predOps(ARMCC::AL));
++
++    // Restore r12 if previously preserved.
++    if (GetMBB->isLiveIn(ARM::R12)) {
++      BuildMI(GetMBB, DL, TII.get(ARM::t2LDR_POST), ARM::R12)
++          .addReg(ARM::SP)
++          .addReg(ARM::SP)
++          .addImm(4)
++          .add(predOps(ARMCC::AL));
++    }
++
++    // This jump is taken remaining space is greater or equal than requested
++    // size
++    BuildMI(GetMBB, DL, TII.get(ARM::tBcc))
++        .addMBB(PostStackMBB)
++        .addImm(ARMCC::GE)
++        .addReg(ARM::CPSR);
++  } else if (AlignedStackSize < 4096) {
++    BuildMI(GetMBB, DL, TII.get(ARM::t2SUBri12), ARM::R12)
++        .addReg(ARM::R12)
++        .addImm(AlignedStackSize)
++        .add(predOps(ARMCC::AL));
++
++    // cmp r12, #func_stack_size  (stack size < 1024 and is multiple of 4)
++    BuildMI(GetMBB, DL, TII.get(ARM::t2CMPri))
++        .addReg(ARM::R12)
++        .addImm(0)
++        .add(predOps(ARMCC::AL));
++
++    // Restore r12 if previously preserved.
++    if (GetMBB->isLiveIn(ARM::R12)) {
++      BuildMI(GetMBB, DL, TII.get(ARM::t2LDR_POST), ARM::R12)
++          .addReg(ARM::SP)
++          .addReg(ARM::SP)
++          .addImm(4)
++          .add(predOps(ARMCC::AL));
++    }
++
++    // This jump is taken remaining space is greater or equal than requested
++    // size
++    BuildMI(GetMBB, DL, TII.get(ARM::tBcc))
++        .addMBB(PostStackMBB)
++        .addImm(ARMCC::GE)
++        .addReg(ARM::CPSR);
++  } else if (AlignedStackSize < 65536) {
++    uint64_t bits7_0 = AlignedStackSize & 0xff;
++    uint64_t bits15_8 = AlignedStackSize & 0xff00;
++
++    BuildMI(GetMBB, DL, TII.get(ARM::t2SUBri), ARM::R12)
++        .addReg(ARM::R12)
++        .addImm(bits7_0)
++        .add(predOps(ARMCC::AL))
++        .addReg(ARM::CPSR, RegState::Define);
++    ;
++
++    BuildMI(GetMBB, DL, TII.get(ARM::t2SUBri), ARM::R12)
++        .addReg(ARM::R12)
++        .addImm(bits15_8)
++        .add(predOps(ARMCC::AL))
++        .addReg(ARM::CPSR, RegState::Define);
++
++    // Restore r12 if previously preserved.
++    if (GetMBB->isLiveIn(ARM::R12)) {
++      BuildMI(GetMBB, DL, TII.get(ARM::t2LDR_POST), ARM::R12)
++          .addReg(ARM::SP)
++          .addReg(ARM::SP)
++          .addImm(4)
++          .add(predOps(ARMCC::AL));
++    }
++
++    // This jump is taken remaining space is greater or equal than requested
++    // size
++    BuildMI(GetMBB, DL, TII.get(ARM::tBcc))
++        .addMBB(PostStackMBB)
++        .addImm(ARMCC::GE)
++        .addReg(ARM::CPSR);
++  } else {
++    report_fatal_error("Segmented stacks function frame too large.");
++  }
++
++  // Otherwise, call SVC
++  BuildMI(AllocMBB, DL, TII.get(ARM::tSVC)).addImm(255).add(predOps(ARMCC::AL));
++
++  assert(AlignedStackSize < 65536);
++  assert(AlignedStackSize % 4 == 0);
++  assert(ARMFI->getArgumentStackSize() < 65536);
++  assert(ARMFI->getArgumentStackSize() % 4 == 0);
++
++  uint32_t stackWordCnt = AlignedStackSize / 4;
++  uint32_t stackArgWordCnt = ARMFI->getArgumentStackSize() / 4;
++  uint32_t svcArg = (stackWordCnt << 16) | stackArgWordCnt;
++
++  // Push constant literal in the instruction stream for SVC handler to consume.
++  // Constant literal (32 bits): stackWordCnt (16 bits) | stackArgWordCnt (16
++  // bits)
++  BuildMI(AllocMBB, DL, TII.get(ARM::tConst16))
++      .addImm(stackWordCnt)
++      .add(predOps(ARMCC::AL));
++  BuildMI(AllocMBB, DL, TII.get(ARM::tConst16))
++      .addImm(stackArgWordCnt)
++      .add(predOps(ARMCC::AL));
++
++#endif
++
+   // Organizing MBB lists
+   PostStackMBB->addSuccessor(&PrologueMBB);
+ 
+diff --git a/llvm/lib/Target/ARM/ARMInstrInfo.td b/llvm/lib/Target/ARM/ARMInstrInfo.td
+index fde386188cd8..7db3d104095e 100644
+--- a/llvm/lib/Target/ARM/ARMInstrInfo.td
++++ b/llvm/lib/Target/ARM/ARMInstrInfo.td
+@@ -1026,6 +1026,10 @@ def imm24b : Operand<i32>, ImmLeaf<i32, [{
+   let ParserMatchClass = Imm24bitAsmOperand;
+ }
+ 
++def imm16b : Operand<i16>, ImmLeaf<i16, [{
++  return Imm >= 0 && Imm <= 0xffff;
++}]> {}
++
+ 
+ /// bf_inv_mask_imm predicate - An AND mask to clear an arbitrary width bitfield
+ /// e.g., 0xf000ffff
+diff --git a/llvm/lib/Target/ARM/ARMInstrThumb.td b/llvm/lib/Target/ARM/ARMInstrThumb.td
+index df6c129a1857..eb34ae77f917 100644
+--- a/llvm/lib/Target/ARM/ARMInstrThumb.td
++++ b/llvm/lib/Target/ARM/ARMInstrThumb.td
+@@ -661,6 +661,11 @@ let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in {
+   }
+ }
+ 
++let hasNoSchedulingInfo = 1 in
++def tConst16 : ThumbI<(outs), (ins imm16b:$imm), AddrModeNone, 2, NoItinerary, ".short\t$imm", "", []>, Encoding {
++  bits<16> imm;
++  let Inst{15-0} = imm;
++}
+ 
+ // A8.6.218 Supervisor Call (Software Interrupt)
+ // A8.6.16 B: Encoding T1
+-- 
+2.39.3 (Apple Git-146)
+
