@@ -1,4 +1,26 @@
-This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt Rust compiler from the realease page. The following describes the building procedure for the patched compiler toolchain.
+This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt Rust compiler from the realease page. The rest describes the building procedure for the patched compiler toolchain.
+
+# Quick Start
+
+Download the prebuilt Rust compiler toolchain from the [release](https://github.com/ZhiyaoMa98/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL.
+
+Decompress the downloaded tar file with
+```
+tar -xf xxxx.tar.xz
+```
+
+Let us call the decompressed directory `$RUST_INSTALL_DIR`.
+
+Register the downloaded toolchain with `rustup` by running
+```
+rustup toolchain link segstk-rust $RUST_INSTALL_DIR
+```
+
+And now it is ready to roll.
+
+In case that `rustup` is not installed, follow the [Rust official website](https://www.rust-lang.org/tools/install) to install it.
+
+# Compiler Modification
 
 Here we summarize the modification for each part of the compiler toolchain.
 
