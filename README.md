@@ -190,38 +190,12 @@ Link the compiled Rust compiler toolchain to `rustup`. Substitute `$RUST_INSTALL
 rustup toolchain link segstk-rust $RUST_INSTALL_DIR
 ```
 
-If later one wants to remove the registration, run the following command. Do not run it for now.
+If later one wants to remove the registration, run the following command. Do *not* run it for now.
 ```
 rustup toolchain uninstall segstk-rust
 ```
 
-## Rust Core Library
-
-Enter the directory containing the Rust core libray within the installed Rust compiler toolchain.
-```
-cd $RUST_INSTALL_DIR/lib/rustlib/src/rust/library/
-```
-
-Backup the original core library source code.
-```
-cp -r core core_backup
-```
-
-Enter the core library.
-```
-cd core
-```
-
-Apply the patch.
-```
-patch -p1 < $PATCHES_DIR/rust-core/core_diff.patch
-```
-
-Now we have finished all patching and installation. Below are troubleshooting sections.
-
-# Troubleshooting
-
-## Missing `rust-lld`
+For unknown reason, the installation misses the linker. Next, we manually copy the linker from the customized LLVM.
 
 Enter the rust installation directory.
 ```
@@ -251,6 +225,46 @@ Copy `rust-lld` from the installed LLVM.
 ```
 cp $LLVM_INSTALL_DIR/bin/lld rust-lld
 ```
+
+## Rust `core` and `alloc` Library
+
+Enter the directory containing the Rust core libray within the installed Rust compiler toolchain.
+```
+cd $RUST_INSTALL_DIR/lib/rustlib/src/rust/library/
+```
+
+Backup the original core library source code.
+```
+cp -r core core_backup
+```
+
+Enter the `core` library.
+```
+cd core
+```
+
+Apply the patch.
+```
+patch -p1 < $PATCHES_DIR/rust-core/core_diff.patch
+```
+
+Enter the `alloc` library.
+```
+cd ../alloc
+```
+
+Apply the patch.
+```
+patch -p1 < $PATCHES_DIR/rust-alloc/alloc_diff.patch
+```
+
+Now we have finished all patching and installation. Below are troubleshooting sections.
+
+# Troubleshooting
+
+## MacOS Execution Error with Prebuilt Toolchain
+
+Go to "Settings", find the "Privacy & Security" tab, scroll down to the bottom, and give the permission in the "Security" section. Usually this need to be done a few times, one for each executable. The problem occurs only when the toolchain is prebuilt and downloaded from the internet, triggering MacOS unsigned executable protection.
 
 ## MacOS Rust Installation Error
 
