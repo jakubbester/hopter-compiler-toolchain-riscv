@@ -233,9 +233,14 @@ Enter the directory containing the Rust core libray within the installed Rust co
 cd $RUST_INSTALL_DIR/lib/rustlib/src/rust/library/
 ```
 
-Backup the original core library source code.
+Backup the original `core` library source code.
 ```
 cp -r core core_backup
+```
+
+Backup the original `alloc` library source code.
+```
+cp -r alloc alloc_backup
 ```
 
 Enter the `core` library.
