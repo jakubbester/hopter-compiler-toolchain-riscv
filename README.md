@@ -1,4 +1,4 @@
-This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt Rust compiler from the realease page. The rest describes the building procedure for the patched compiler toolchain.
+This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt Rust compiler from the release page. The rest describes the building procedure for the patched compiler toolchain.
 
 # Quick Start
 
