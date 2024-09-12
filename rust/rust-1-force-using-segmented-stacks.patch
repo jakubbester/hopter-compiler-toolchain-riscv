@@ -1,6 +1,6 @@
-From 9e472880537298604f651d05d654b2648ad2a5af Mon Sep 17 00:00:00 2001
+From 35eb5ced7f47222e02105850c1d9a6f5df2efe15 Mon Sep 17 00:00:00 2001
 From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
-Date: Sat, 27 Jan 2024 20:52:34 -0500
+Date: Wed, 11 Sep 2024 19:54:33 -0400
 Subject: [PATCH] Force using segmented stacks.
 
 ---
@@ -12,10 +12,10 @@ Subject: [PATCH] Force using segmented stacks.
  5 files changed, 13 insertions(+)
 
 diff --git a/compiler/rustc_codegen_llvm/src/attributes.rs b/compiler/rustc_codegen_llvm/src/attributes.rs
-index b6c01545f30..83c3c307796 100644
+index e7669470026..526f7ed9b98 100644
 --- a/compiler/rustc_codegen_llvm/src/attributes.rs
 +++ b/compiler/rustc_codegen_llvm/src/attributes.rs
-@@ -487,6 +487,14 @@ pub fn from_fn_attrs<'ll, 'tcx>(
+@@ -513,6 +513,14 @@ pub fn from_fn_attrs<'ll, 'tcx>(
          to_add.push(llvm::CreateAttrStringValue(cx.llcx, "target-features", &target_features));
      }
  
@@ -31,47 +31,47 @@ index b6c01545f30..83c3c307796 100644
  }
  
 diff --git a/compiler/rustc_codegen_ssa/src/codegen_attrs.rs b/compiler/rustc_codegen_ssa/src/codegen_attrs.rs
-index 2e0840f2d1b..26524b08a81 100644
+index bfa4c683d56..a4ceeff78e7 100644
 --- a/compiler/rustc_codegen_ssa/src/codegen_attrs.rs
 +++ b/compiler/rustc_codegen_ssa/src/codegen_attrs.rs
-@@ -102,6 +102,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: LocalDefId) -> CodegenFnAttrs {
+@@ -100,6 +100,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: LocalDefId) -> CodegenFnAttrs {
  
          match name {
              sym::cold => codegen_fn_attrs.flags |= CodegenFnAttrFlags::COLD,
 +            sym::no_split_stack => codegen_fn_attrs.flags |= CodegenFnAttrFlags::NO_SPLIT_STACK,
              sym::rustc_allocator => codegen_fn_attrs.flags |= CodegenFnAttrFlags::ALLOCATOR,
-             sym::ffi_returns_twice => {
-                 codegen_fn_attrs.flags |= CodegenFnAttrFlags::FFI_RETURNS_TWICE
+             sym::ffi_pure => codegen_fn_attrs.flags |= CodegenFnAttrFlags::FFI_PURE,
+             sym::ffi_const => codegen_fn_attrs.flags |= CodegenFnAttrFlags::FFI_CONST,
 diff --git a/compiler/rustc_feature/src/builtin_attrs.rs b/compiler/rustc_feature/src/builtin_attrs.rs
-index 214de3ca402..9c8e6c7deb6 100644
+index f8bbd27ac31..8b290e853f2 100644
 --- a/compiler/rustc_feature/src/builtin_attrs.rs
 +++ b/compiler/rustc_feature/src/builtin_attrs.rs
-@@ -383,6 +383,7 @@ pub struct BuiltinAttribute {
+@@ -469,6 +469,7 @@ pub struct BuiltinAttribute {
      // Code generation:
-     ungated!(inline, Normal, template!(Word, List: "always|never"), FutureWarnFollowing, @only_local: true),
-     ungated!(cold, Normal, template!(Word), WarnFollowing, @only_local: true),
-+    ungated!(no_split_stack, Normal, template!(Word), WarnFollowing),
-     ungated!(no_builtins, CrateLevel, template!(Word), WarnFollowing),
+     ungated!(inline, Normal, template!(Word, List: "always|never"), FutureWarnFollowing, EncodeCrossCrate::No),
+     ungated!(cold, Normal, template!(Word), WarnFollowing, EncodeCrossCrate::No),
++    ungated!(no_split_stack, Normal, template!(Word), WarnFollowing, EncodeCrossCrate::No),
+     ungated!(no_builtins, CrateLevel, template!(Word), WarnFollowing, EncodeCrossCrate::Yes),
      ungated!(
          target_feature, Normal, template!(List: r#"enable = "name""#),
 diff --git a/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs b/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs
-index f758c1d5e6f..065c46d183f 100644
+index 3ddf889b63a..6dea5896c0b 100644
 --- a/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs
 +++ b/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs
-@@ -102,6 +102,8 @@ pub struct CodegenFnAttrFlags: u32 {
-         const ALLOCATOR_ZEROED          = 1 << 19;
+@@ -125,6 +125,8 @@ impl CodegenFnAttrFlags: u32 {
+         const ALLOCATOR_ZEROED          = 1 << 18;
          /// `#[no_builtins]`: indicates that disable implicit builtin knowledge of functions for the function.
-         const NO_BUILTINS               = 1 << 20;
+         const NO_BUILTINS               = 1 << 19;
 +        /// `#[no_split_stack]`: use contiguous stack instead of segmented stack.
-+        const NO_SPLIT_STACK            = 1 << 21;
++        const NO_SPLIT_STACK            = 1 << 20;
      }
  }
- 
+ rustc_data_structures::external_bitflags_debug! { CodegenFnAttrFlags }
 diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
-index f287862cc23..fa34a3e44c5 100644
+index 99d80eda374..401a055ec59 100644
 --- a/compiler/rustc_span/src/symbol.rs
 +++ b/compiler/rustc_span/src/symbol.rs
-@@ -1093,6 +1093,7 @@
+@@ -1298,6 +1298,7 @@
          no_main,
          no_mangle,
          no_sanitize,
@@ -80,5 +80,5 @@ index f287862cc23..fa34a3e44c5 100644
          no_start,
          no_std,
 -- 
-2.39.3 (Apple Git-145)
+2.39.3 (Apple Git-146)
 

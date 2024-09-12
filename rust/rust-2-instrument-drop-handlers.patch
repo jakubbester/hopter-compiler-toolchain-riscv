@@ -1,14 +1,14 @@
-From fb8a9023543007b4e5e87b89dc6cf50a1e8b879e Mon Sep 17 00:00:00 2001
+From 02711d52b5c08a14b1d397dbdcd1d097f92f7484 Mon Sep 17 00:00:00 2001
 From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
-Date: Thu, 25 Jul 2024 17:14:10 -0400
+Date: Wed, 11 Sep 2024 21:06:12 -0400
 Subject: [PATCH] Instrument drop handlers.
 
 ---
- compiler/rustc_mir_transform/src/shim.rs | 309 ++++++++++++++++++++++-
- 1 file changed, 303 insertions(+), 6 deletions(-)
+ compiler/rustc_mir_transform/src/shim.rs | 311 ++++++++++++++++++++++-
+ 1 file changed, 306 insertions(+), 5 deletions(-)
 
 diff --git a/compiler/rustc_mir_transform/src/shim.rs b/compiler/rustc_mir_transform/src/shim.rs
-index ab7961321b3..7ec76675d75 100644
+index 6835a39cf36..4de5b5726ff 100644
 --- a/compiler/rustc_mir_transform/src/shim.rs
 +++ b/compiler/rustc_mir_transform/src/shim.rs
 @@ -1,3 +1,4 @@
@@ -16,16 +16,7 @@ index ab7961321b3..7ec76675d75 100644
  use rustc_hir as hir;
  use rustc_hir::def_id::DefId;
  use rustc_hir::lang_items::LangItem;
-@@ -9,7 +10,7 @@
- 
- use rustc_index::{Idx, IndexVec};
- 
--use rustc_span::Span;
-+use rustc_span::{Span, DUMMY_SP};
- use rustc_target::spec::abi::Abi;
- 
- use std::fmt;
-@@ -170,6 +171,268 @@ fn local_decls_for_sig<'tcx>(
+@@ -211,6 +212,270 @@ fn local_decls_for_sig<'tcx>(
          .collect()
  }
  
@@ -52,7 +43,7 @@ index ab7961321b3..7ec76675d75 100644
 +        kind: StatementKind::Assign(Box::new((
 +            Place::from(addr_local),
 +            Rvalue::Cast(
-+                CastKind::PointerFromExposedAddress,
++                CastKind::PointerWithExposedProvenance,
 +                Operand::Constant(Box::new(addr_constant)),
 +                addr_type,
 +            ),
@@ -99,7 +90,7 @@ index ab7961321b3..7ec76675d75 100644
 +        kind: StatementKind::Assign(Box::new((
 +            Place::from(addr_local),
 +            Rvalue::Cast(
-+                CastKind::PointerFromExposedAddress,
++                CastKind::PointerWithExposedProvenance,
 +                Operand::Constant(Box::new(addr_constant)),
 +                addr_type,
 +            ),
@@ -259,6 +250,8 @@ index ab7961321b3..7ec76675d75 100644
 +    call_panic_block: BasicBlock,
 +    span: Span,
 +) {
++    use rustc_middle::ty::inherent::*;
++
 +    let source_info = SourceInfo::outermost(span);
 +
 +    let fn_ptr_type = Ty::new_fn_ptr(
@@ -267,8 +260,8 @@ index ab7961321b3..7ec76675d75 100644
 +            [],
 +            Ty::new_unit(tcx),
 +            false,
-+            hir::Unsafety::Normal,
-+            Abi::C { unwind: true },
++            hir::Safety::Safe,
++            rustc_target::spec::abi::Abi::C { unwind: true },
 +        )),
 +    );
 +
@@ -281,7 +274,7 @@ index ab7961321b3..7ec76675d75 100644
 +        source_info,
 +        kind: TerminatorKind::Call {
 +            func: Operand::Copy(fn_ptr_place),
-+            args: vec![],
++            args: Box::new([]),
 +            destination: Place::from(ret_val_local),
 +            target: None,
 +            unwind: UnwindAction::Continue,
@@ -294,7 +287,7 @@ index ab7961321b3..7ec76675d75 100644
  fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>) -> Body<'tcx> {
      debug!("build_drop_shim(def_id={:?}, ty={:?})", def_id, ty);
  
-@@ -186,8 +449,14 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
+@@ -227,8 +492,15 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
  
      let source_info = SourceInfo::outermost(span);
  
@@ -308,13 +301,15 @@ index ab7961321b3..7ec76675d75 100644
 +    let call_panic_block = BasicBlock::new(5);
 +    let return_block = BasicBlock::new(6);
 +    let mut blocks = IndexVec::with_capacity(7);
++
      let block = |blocks: &mut IndexVec<_, _>, kind| {
          blocks.push(BasicBlockData {
              statements: vec![],
-@@ -195,13 +464,41 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
+@@ -236,13 +508,42 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
              is_cleanup: false,
          })
      };
++
 +    // incr_cnt_block
 +    block(&mut blocks, TerminatorKind::Goto { target: drop_start_block });
 +    // drop_start_block
@@ -330,7 +325,7 @@ index ab7961321b3..7ec76675d75 100644
 +    // return_block
      block(&mut blocks, TerminatorKind::Return);
  
-     let source = MirSource::from_instance(ty::InstanceDef::DropGlue(def_id, ty));
+     let source = MirSource::from_instance(ty::InstanceKind::DropGlue(def_id, ty));
      let mut body =
          new_body(source, blocks, local_decls_for_sig(&sig, span), sig.inputs().len(), span);
  
@@ -353,7 +348,7 @@ index ab7961321b3..7ec76675d75 100644
      // The first argument (index 0), but add 1 for the return value.
      let mut dropee_ptr = Place::from(Local::new(1 + 0));
      if tcx.sess.opts.unstable_opts.mir_emit_retag {
-@@ -225,7 +522,7 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
+@@ -266,7 +567,7 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
              StatementKind::Retag(RetagKind::FnEntry, Box::new(dropee_ptr)),
          ];
          for s in new_statements {
@@ -362,7 +357,7 @@ index ab7961321b3..7ec76675d75 100644
                  .statements
                  .push(Statement { source_info, kind: s });
          }
-@@ -243,9 +540,9 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
+@@ -284,9 +585,9 @@ fn build_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Option<Ty<'tcx>>)
                  source_info,
                  dropee,
                  (),

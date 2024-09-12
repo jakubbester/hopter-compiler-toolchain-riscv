@@ -1,17 +1,17 @@
-From 81998d1e79d664f23105b8c193cf2dc43df03a46 Mon Sep 17 00:00:00 2001
+From 6da733a4ecc24c837a772dbbb11fcdc240caa1a9 Mon Sep 17 00:00:00 2001
 From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
-Date: Sat, 27 Jan 2024 20:14:59 -0500
+Date: Wed, 11 Sep 2024 17:15:25 -0400
 Subject: [PATCH] Implement segmented stack for ARMv7em.
 
 ---
  lld/ELF/Arch/ARM.cpp                     |   7 +
- llvm/lib/Target/ARM/ARMFrameLowering.cpp | 159 ++++++++++++++++++++++-
+ llvm/lib/Target/ARM/ARMFrameLowering.cpp | 156 ++++++++++++++++++++++-
  llvm/lib/Target/ARM/ARMInstrInfo.td      |   4 +
  llvm/lib/Target/ARM/ARMInstrThumb.td     |   5 +
- 4 files changed, 172 insertions(+), 3 deletions(-)
+ 4 files changed, 169 insertions(+), 3 deletions(-)
 
 diff --git a/lld/ELF/Arch/ARM.cpp b/lld/ELF/Arch/ARM.cpp
-index c10ffebc1666..39ca199fb4e7 100644
+index 687f9499009d..fa1c0e46168f 100644
 --- a/lld/ELF/Arch/ARM.cpp
 +++ b/lld/ELF/Arch/ARM.cpp
 @@ -48,6 +48,8 @@ public:
@@ -23,45 +23,32 @@ index c10ffebc1666..39ca199fb4e7 100644
  };
  enum class CodeState { Data = 0, Thumb = 2, Arm = 4 };
  } // namespace
-@@ -1455,6 +1457,11 @@ template <typename ELFT> void elf::writeARMCmseImportLib() {
-           "': " + toString(std::move(e)));
- }
- 
+@@ -1469,3 +1471,8 @@ template void ObjFile<ELF32LE>::importCmseSymbols();
+ template void ObjFile<ELF32BE>::importCmseSymbols();
+ template void ObjFile<ELF64LE>::importCmseSymbols();
+ template void ObjFile<ELF64BE>::importCmseSymbols();
++
 +bool ARM::adjustPrologueForCrossSplitStack(uint8_t *loc, uint8_t *end,
 +                                           uint8_t stOther) const {
 +  return true;
 +}
-+
- TargetInfo *elf::getARMTargetInfo() {
-   static ARM target;
-   return &target;
 diff --git a/llvm/lib/Target/ARM/ARMFrameLowering.cpp b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
-index 650f4650eef0..dc4079f9055a 100644
+index 9b54dd4e4e61..480de60d9f60 100644
 --- a/llvm/lib/Target/ARM/ARMFrameLowering.cpp
 +++ b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
-@@ -161,6 +161,8 @@
- #include <utility>
- #include <vector>
- 
-+#include <iostream>
-+
- #define DEBUG_TYPE "arm-frame-lowering"
- 
- using namespace llvm;
-@@ -2969,8 +2971,10 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+@@ -2987,8 +2987,9 @@ void ARMFrameLowering::adjustForSegmentedStacks(
    // android/linux. Note that thumb1/thumb2 are support for android/linux.
    if (MF.getFunction().isVarArg())
      report_fatal_error("Segmented stacks do not support vararg functions.");
 -  if (!ST->isTargetAndroid() && !ST->isTargetLinux())
 -    report_fatal_error("Segmented stacks not supported on this platform.");
-+
 +  // Supress target checking.
 +  // if (!ST->isTargetAndroid() && !ST->isTargetLinux())
 +  //   report_fatal_error("Segmented stacks not supported on this platform.");
  
    MachineFrameInfo &MFI = MF.getFrameInfo();
    MachineModuleInfo &MMI = MF.getMMI();
-@@ -2981,7 +2985,11 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+@@ -2999,7 +3000,11 @@ void ARMFrameLowering::adjustForSegmentedStacks(
    ARMFunctionInfo *ARMFI = MF.getInfo<ARMFunctionInfo>();
    DebugLoc DL;
  
@@ -74,7 +61,7 @@ index 650f4650eef0..dc4079f9055a 100644
      return;
  
    uint64_t StackSize = MFI.getStackSize();
-@@ -3049,6 +3057,8 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+@@ -3068,6 +3073,8 @@ void ARMFrameLowering::adjustForSegmentedStacks(
    // boundary directly to the value of the stack pointer, per gcc.
    bool CompareStackPointer = AlignedStackSize < kSplitStackAvailable;
  
@@ -83,11 +70,11 @@ index 650f4650eef0..dc4079f9055a 100644
    // We will use two of the callee save registers as scratch registers so we
    // need to save those registers onto the stack.
    // We will use SR0 to hold stack limit and SR1 to hold the stack size
-@@ -3393,6 +3403,149 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+@@ -3417,6 +3424,149 @@ void ARMFrameLowering::adjustForSegmentedStacks(
          .addCFIIndex(CFIIndex);
    }
  
-+#else
++# else
 +
 +  // If r12 is live, preserve its original value before using it as the
 +  // scratch register.
@@ -228,13 +215,13 @@ index 650f4650eef0..dc4079f9055a 100644
 +      .addImm(stackArgWordCnt)
 +      .add(predOps(ARMCC::AL));
 +
-+#endif
++# endif
 +
    // Organizing MBB lists
    PostStackMBB->addSuccessor(&PrologueMBB);
  
 diff --git a/llvm/lib/Target/ARM/ARMInstrInfo.td b/llvm/lib/Target/ARM/ARMInstrInfo.td
-index fde386188cd8..7db3d104095e 100644
+index 812b5730875d..b96e1277df78 100644
 --- a/llvm/lib/Target/ARM/ARMInstrInfo.td
 +++ b/llvm/lib/Target/ARM/ARMInstrInfo.td
 @@ -1026,6 +1026,10 @@ def imm24b : Operand<i32>, ImmLeaf<i32, [{
@@ -249,7 +236,7 @@ index fde386188cd8..7db3d104095e 100644
  /// bf_inv_mask_imm predicate - An AND mask to clear an arbitrary width bitfield
  /// e.g., 0xf000ffff
 diff --git a/llvm/lib/Target/ARM/ARMInstrThumb.td b/llvm/lib/Target/ARM/ARMInstrThumb.td
-index df6c129a1857..eb34ae77f917 100644
+index be0ca964d3f9..7ebef6c1ba7a 100644
 --- a/llvm/lib/Target/ARM/ARMInstrThumb.td
 +++ b/llvm/lib/Target/ARM/ARMInstrThumb.td
 @@ -661,6 +661,11 @@ let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in {

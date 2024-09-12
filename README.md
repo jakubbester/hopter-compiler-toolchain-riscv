@@ -1,8 +1,8 @@
-This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt Rust compiler from the release page. The rest describes the building procedure for the patched compiler toolchain.
+This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt version from the release page. The rest describes the customization made to the compiler toolchain and the building procedure.
 
 # Quick Start
 
-Download the prebuilt Rust compiler toolchain from the [release](https://github.com/ZhiyaoMa98/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL.
+Download the prebuilt Rust compiler toolchain from the [release](https://github.com/ZhiyaoMa98/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL. MacOS users will need to grant execution permission to the downloaded binaries.
 
 Decompress the downloaded tar file with
 ```
@@ -62,7 +62,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 Clone the patches in this repo.
 ```
-https://github.com/ZhiyaoMa98/hopter-compiler-toolchain.git
+https://github.com/hopter-project/hopter-compiler-toolchain.git
 ```
 
 In the following, we call the cloned patches directory `$PATCHES_DIR`.
@@ -84,7 +84,7 @@ cd llvm-project
 
 Checkout the specific branch.
 ```
-git checkout rustc/17.0-2023-12-14
+git checkout rustc/18.1-2024-05-19
 ```
 
 Apply the patches from `$PATCHES_DIR/llvm`. If there are multiple patches, apply them *in number sequence* by running the command once for each patch.
@@ -141,7 +141,7 @@ git submodule update --init --recursive
 
 Checkout the specific branch.
 ```
-git checkout 1.75.0
+git checkout 1.81.0
 ```
 
 Apply the patches from `$PATCHES_DIR/rust`. If there are multiple patches, apply them *in number sequence* by running the command once for each patch.
@@ -153,7 +153,6 @@ Create or edit a file with name `config.toml` to include the following. Substitu
 
 ```
 profile = "user"
-changelog-seen = 2
 
 [build]
 extended = true
@@ -195,38 +194,7 @@ If later one wants to remove the registration, run the following command. Do *no
 rustup toolchain uninstall segstk-rust
 ```
 
-For unknown reason, the installation misses the linker. Next, we manually copy the linker from the customized LLVM.
-
-Enter the rust installation directory.
-```
-cd $RUST_INSTALL_DIR/lib/rustlib
-```
-
-Depending on the host, further `cd` into the corresponding subdirectory. Examples:
-```
-# MacOS with Apple Silicon
-cd aarch64-apple-darwin
-
-# Linux with x86_64
-cd x86_64-unknown-linux-gnu
-```
-
-Make a new subdirectory.
-```
-mkdir bin
-```
-
-Enter the new subdirectory.
-```
-cd bin
-```
-
-Copy `rust-lld` from the installed LLVM.
-```
-cp $LLVM_INSTALL_DIR/bin/lld rust-lld
-```
-
-## Rust `core` and `alloc` Library
+## Rust `core` Library
 
 Enter the directory containing the Rust core libray within the installed Rust compiler toolchain.
 ```
@@ -238,11 +206,6 @@ Backup the original `core` library source code.
 cp -r core core_backup
 ```
 
-Backup the original `alloc` library source code.
-```
-cp -r alloc alloc_backup
-```
-
 Enter the `core` library.
 ```
 cd core
@@ -251,16 +214,6 @@ cd core
 Apply the patch.
 ```
 patch -p1 < $PATCHES_DIR/rust-core/core_diff.patch
-```
-
-Enter the `alloc` library.
-```
-cd ../alloc
-```
-
-Apply the patch.
-```
-patch -p1 < $PATCHES_DIR/rust-alloc/alloc_diff.patch
 ```
 
 Now we have finished all patching and installation. Below are troubleshooting sections.

@@ -1,0 +1,121 @@
+From 62156081b14cc8220e3e86d5fd806cf462f9482b Mon Sep 17 00:00:00 2001
+From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
+Date: Wed, 11 Sep 2024 21:07:30 -0400
+Subject: [PATCH] Prevent `nounwind` optimization.
+
+---
+ compiler/rustc_codegen_llvm/src/abi.rs        | 12 ++++----
+ compiler/rustc_codegen_ssa/src/mir/block.rs   |  8 +++---
+ .../rustc_mir_transform/src/instsimplify.rs   | 28 ++++---------------
+ 3 files changed, 15 insertions(+), 33 deletions(-)
+
+diff --git a/compiler/rustc_codegen_llvm/src/abi.rs b/compiler/rustc_codegen_llvm/src/abi.rs
+index d034f9b5256..a43e61cd76e 100644
+--- a/compiler/rustc_codegen_llvm/src/abi.rs
++++ b/compiler/rustc_codegen_llvm/src/abi.rs
+@@ -401,9 +401,9 @@ fn apply_attrs_llfn(&self, cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value) {
+         if self.ret.layout.abi.is_uninhabited() {
+             func_attrs.push(llvm::AttributeKind::NoReturn.create_attr(cx.llcx));
+         }
+-        if !self.can_unwind {
+-            func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(cx.llcx));
+-        }
++        // if !self.can_unwind {
++        //     func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(cx.llcx));
++        // }
+         if let Conv::RiscvInterrupt { kind } = self.conv {
+             func_attrs.push(llvm::CreateAttrStringValue(cx.llcx, "interrupt", kind.as_str()));
+         }
+@@ -484,9 +484,9 @@ fn apply_attrs_callsite(&self, bx: &mut Builder<'_, 'll, 'tcx>, callsite: &'ll V
+         if self.ret.layout.abi.is_uninhabited() {
+             func_attrs.push(llvm::AttributeKind::NoReturn.create_attr(bx.cx.llcx));
+         }
+-        if !self.can_unwind {
+-            func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(bx.cx.llcx));
+-        }
++        // if !self.can_unwind {
++        //     func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(bx.cx.llcx));
++        // }
+         attributes::apply_to_callsite(callsite, llvm::AttributePlace::Function, &{ func_attrs });
+ 
+         let mut i = 0;
+diff --git a/compiler/rustc_codegen_ssa/src/mir/block.rs b/compiler/rustc_codegen_ssa/src/mir/block.rs
+index c9c8f02c491..6a459c3d12f 100644
+--- a/compiler/rustc_codegen_ssa/src/mir/block.rs
++++ b/compiler/rustc_codegen_ssa/src/mir/block.rs
+@@ -158,7 +158,7 @@ fn do_call<Bx: BuilderMethods<'a, 'tcx>>(
+         fn_ptr: Bx::Value,
+         llargs: &[Bx::Value],
+         destination: Option<(ReturnDest<'tcx, Bx::Value>, mir::BasicBlock)>,
+-        mut unwind: mir::UnwindAction,
++        unwind: mir::UnwindAction,
+         copied_constant_arguments: &[PlaceRef<'tcx, <Bx as BackendTypes>::Value>],
+         instance: Option<Instance<'tcx>>,
+         mergeable_succ: bool,
+@@ -192,9 +192,9 @@ fn do_call<Bx: BuilderMethods<'a, 'tcx>>(
+             None
+         };
+ 
+-        if !fn_abi.can_unwind {
+-            unwind = mir::UnwindAction::Unreachable;
+-        }
++        // if !fn_abi.can_unwind {
++        //     unwind = mir::UnwindAction::Unreachable;
++        // }
+ 
+         let unwind_block = match unwind {
+             mir::UnwindAction::Cleanup(cleanup) => Some(self.llbb_with_cleanup(fx, cleanup)),
+diff --git a/compiler/rustc_mir_transform/src/instsimplify.rs b/compiler/rustc_mir_transform/src/instsimplify.rs
+index 8209e5e2711..44cc9039898 100644
+--- a/compiler/rustc_mir_transform/src/instsimplify.rs
++++ b/compiler/rustc_mir_transform/src/instsimplify.rs
+@@ -3,14 +3,14 @@
+ use crate::simplify::simplify_duplicate_switch_targets;
+ use crate::take_array;
+ use rustc_ast::attr;
+-use rustc_middle::bug;
++// use rustc_middle::bug;
+ use rustc_middle::mir::*;
+-use rustc_middle::ty::layout;
++// use rustc_middle::ty::layout;
+ use rustc_middle::ty::layout::ValidityRequirement;
+ use rustc_middle::ty::{self, GenericArgsRef, ParamEnv, Ty, TyCtxt};
+ use rustc_span::sym;
+ use rustc_span::symbol::Symbol;
+-use rustc_target::spec::abi::Abi;
++// use rustc_target::spec::abi::Abi;
+ 
+ pub struct InstSimplify;
+ 
+@@ -301,26 +301,8 @@ fn simplify_primitive_clone(
+         terminator.kind = TerminatorKind::Goto { target: destination_block };
+     }
+ 
+-    fn simplify_nounwind_call(&self, terminator: &mut Terminator<'tcx>) {
+-        let TerminatorKind::Call { func, unwind, .. } = &mut terminator.kind else {
+-            return;
+-        };
+-
+-        let Some((def_id, _)) = func.const_fn_def() else {
+-            return;
+-        };
+-
+-        let body_ty = self.tcx.type_of(def_id).skip_binder();
+-        let body_abi = match body_ty.kind() {
+-            ty::FnDef(..) => body_ty.fn_sig(self.tcx).abi(),
+-            ty::Closure(..) => Abi::RustCall,
+-            ty::Coroutine(..) => Abi::Rust,
+-            _ => bug!("unexpected body ty: {:?}", body_ty),
+-        };
+-
+-        if !layout::fn_can_unwind(self.tcx, Some(def_id), body_abi) {
+-            *unwind = UnwindAction::Unreachable;
+-        }
++    fn simplify_nounwind_call(&self, _terminator: &mut Terminator<'tcx>) {
++        return;
+     }
+ 
+     fn simplify_intrinsic_assert(&self, terminator: &mut Terminator<'tcx>) {
+-- 
+2.39.3 (Apple Git-146)
+

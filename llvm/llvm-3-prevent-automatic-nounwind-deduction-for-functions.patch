@@ -1,20 +1,20 @@
-From 210e45c20b9866f193a3b960d620e9f15d528f31 Mon Sep 17 00:00:00 2001
+From 98ff917f5aa977d9766315e05cd1e5002ea7f163 Mon Sep 17 00:00:00 2001
 From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
-Date: Fri, 9 Aug 2024 17:47:37 -0400
+Date: Wed, 11 Sep 2024 20:57:04 -0400
 Subject: [PATCH] Prevent automatic `nounwind` deduction for functions.
 
 ---
- llvm/include/llvm/Transforms/IPO/Attributor.h |  46 +++---
- llvm/lib/Transforms/IPO/Attributor.cpp        |   2 +-
- .../Transforms/IPO/AttributorAttributes.cpp   | 156 +++++++++---------
- llvm/lib/Transforms/IPO/FunctionAttrs.cpp     |  42 ++---
- 4 files changed, 123 insertions(+), 123 deletions(-)
+ llvm/include/llvm/Transforms/IPO/Attributor.h |  46 +++----
+ llvm/lib/Transforms/IPO/Attributor.cpp        |   4 +-
+ .../Transforms/IPO/AttributorAttributes.cpp   | 128 +++++++++---------
+ llvm/lib/Transforms/IPO/FunctionAttrs.cpp     |  42 +++---
+ 4 files changed, 110 insertions(+), 110 deletions(-)
 
 diff --git a/llvm/include/llvm/Transforms/IPO/Attributor.h b/llvm/include/llvm/Transforms/IPO/Attributor.h
-index 1da00acdf034..df9dd55cf59a 100644
+index 30c51250af61..29b312163c27 100644
 --- a/llvm/include/llvm/Transforms/IPO/Attributor.h
 +++ b/llvm/include/llvm/Transforms/IPO/Attributor.h
-@@ -3390,35 +3390,35 @@ ChangeStatus clampStateAndIndicateChange(StateType &S, const StateType &R) {
+@@ -3470,35 +3470,35 @@ ChangeStatus clampStateAndIndicateChange(StateType &S, const StateType &R) {
  ///                       Abstract Attribute Classes
  /// ----------------------------------------------------------------------------
  
@@ -72,7 +72,7 @@ index 1da00acdf034..df9dd55cf59a 100644
  
  struct AANoSync
      : public IRAttribute<Attribute::NoSync,
-@@ -6090,7 +6090,7 @@ bool hasAssumedIRAttr(Attributor &A, const AbstractAttribute *QueryingAA,
+@@ -6452,7 +6452,7 @@ bool hasAssumedIRAttr(Attributor &A, const AbstractAttribute *QueryingAA,
      IsKnown = AA->isKnown(__VA_ARGS__);                                        \
      return true;                                                               \
    }
@@ -82,23 +82,32 @@ index 1da00acdf034..df9dd55cf59a 100644
      CASE(NoFree, AANoFree, );
      CASE(NoCapture, AANoCapture, );
 diff --git a/llvm/lib/Transforms/IPO/Attributor.cpp b/llvm/lib/Transforms/IPO/Attributor.cpp
-index 847d07a49dee..1be45a87478d 100644
+index d8e290cbc8a4..c14515f24999 100644
 --- a/llvm/lib/Transforms/IPO/Attributor.cpp
 +++ b/llvm/lib/Transforms/IPO/Attributor.cpp
-@@ -3291,7 +3291,7 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
+@@ -3397,7 +3397,7 @@ void Attributor::identifyDefaultAbstractAttributes(Function &F) {
    if (IsIPOAmendable) {
  
      // Every function can be nounwind.
 -    checkAndQueryIRAttr<Attribute::NoUnwind, AANoUnwind>(FPos, FnAttrs);
 +    // checkAndQueryIRAttr<Attribute::NoUnwind, AANoUnwind>(FPos, FnAttrs);
  
-     // Every function might be marked "nosync"
-     checkAndQueryIRAttr<Attribute::NoSync, AANoSync>(FPos, FnAttrs);
+     // Every function might be "no-return".
+     checkAndQueryIRAttr<Attribute::NoReturn, AANoReturn>(FPos, FnAttrs);
+@@ -3929,7 +3929,7 @@ static bool runAttributorLightOnFunctions(InformationCache &InfoCache,
+   AC.IsModulePass = IsModulePass;
+   AC.DeleteFns = false;
+   DenseSet<const char *> Allowed(
+-      {&AAWillReturn::ID, &AANoUnwind::ID, &AANoRecurse::ID, &AANoSync::ID,
++      {&AAWillReturn::ID, /*&AANoUnwind::ID,*/ &AANoRecurse::ID, &AANoSync::ID,
+        &AANoFree::ID, &AANoReturn::ID, &AAMemoryLocation::ID,
+        &AAMemoryBehavior::ID, &AAUnderlyingObjects::ID, &AANoCapture::ID,
+        &AAInterFnReachability::ID, &AAIntraFnReachability::ID, &AACallEdges::ID,
 diff --git a/llvm/lib/Transforms/IPO/AttributorAttributes.cpp b/llvm/lib/Transforms/IPO/AttributorAttributes.cpp
-index 3a9a89d61355..fc2b9a696f64 100644
+index 585364dd7aa2..4b4b18287a24 100644
 --- a/llvm/lib/Transforms/IPO/AttributorAttributes.cpp
 +++ b/llvm/lib/Transforms/IPO/AttributorAttributes.cpp
-@@ -156,7 +156,7 @@ namespace llvm {
+@@ -161,7 +161,7 @@ namespace llvm {
    }
  
  PIPE_OPERATOR(AAIsDead)
@@ -107,7 +116,7 @@ index 3a9a89d61355..fc2b9a696f64 100644
  PIPE_OPERATOR(AANoSync)
  PIPE_OPERATOR(AANoRecurse)
  PIPE_OPERATOR(AANonConvergent)
-@@ -2030,81 +2030,81 @@ struct AAPointerInfoCallSiteReturned final : AAPointerInfoFloating {
+@@ -2043,67 +2043,67 @@ struct AAPointerInfoCallSiteReturned final : AAPointerInfoFloating {
  /// -----------------------NoUnwind Function Attribute--------------------------
  
  namespace {
@@ -164,24 +173,10 @@ index 3a9a89d61355..fc2b9a696f64 100644
 -};
 -
 -/// NoUnwind attribute deduction for a call sites.
--struct AANoUnwindCallSite final : AANoUnwindImpl {
+-struct AANoUnwindCallSite final
+-    : AACalleeToCallSite<AANoUnwind, AANoUnwindImpl> {
 -  AANoUnwindCallSite(const IRPosition &IRP, Attributor &A)
--      : AANoUnwindImpl(IRP, A) {}
--
--  /// See AbstractAttribute::updateImpl(...).
--  ChangeStatus updateImpl(Attributor &A) override {
--    // TODO: Once we have call site specific value information we can provide
--    //       call site specific liveness information and then it makes
--    //       sense to specialize attributes for call sites arguments instead of
--    //       redirecting requests to the callee argument.
--    Function *F = getAssociatedFunction();
--    const IRPosition &FnPos = IRPosition::function(*F);
--    bool IsKnownNoUnwind;
--    if (AA::hasAssumedIRAttr<Attribute::NoUnwind>(
--            A, this, FnPos, DepClassTy::REQUIRED, IsKnownNoUnwind))
--      return ChangeStatus::UNCHANGED;
--    return indicatePessimisticFixpoint();
--  }
+-      : AACalleeToCallSite<AANoUnwind, AANoUnwindImpl>(IRP, A) {}
 -
 -  /// See AbstractAttribute::trackStatistics()
 -  void trackStatistics() const override { STATS_DECLTRACK_CS_ATTR(nounwind); }
@@ -239,24 +234,10 @@ index 3a9a89d61355..fc2b9a696f64 100644
 +// };
 +
 +// /// NoUnwind attribute deduction for a call sites.
-+// struct AANoUnwindCallSite final : AANoUnwindImpl {
++// struct AANoUnwindCallSite final
++//     : AACalleeToCallSite<AANoUnwind, AANoUnwindImpl> {
 +//   AANoUnwindCallSite(const IRPosition &IRP, Attributor &A)
-+//       : AANoUnwindImpl(IRP, A) {}
-+
-+//   /// See AbstractAttribute::updateImpl(...).
-+//   ChangeStatus updateImpl(Attributor &A) override {
-+//     // TODO: Once we have call site specific value information we can provide
-+//     //       call site specific liveness information and then it makes
-+//     //       sense to specialize attributes for call sites arguments instead of
-+//     //       redirecting requests to the callee argument.
-+//     Function *F = getAssociatedFunction();
-+//     const IRPosition &FnPos = IRPosition::function(*F);
-+//     bool IsKnownNoUnwind;
-+//     if (AA::hasAssumedIRAttr<Attribute::NoUnwind>(
-+//             A, this, FnPos, DepClassTy::REQUIRED, IsKnownNoUnwind))
-+//       return ChangeStatus::UNCHANGED;
-+//     return indicatePessimisticFixpoint();
-+//   }
++//       : AACalleeToCallSite<AANoUnwind, AANoUnwindImpl>(IRP, A) {}
 +
 +//   /// See AbstractAttribute::trackStatistics()
 +//   void trackStatistics() const override { STATS_DECLTRACK_CS_ATTR(nounwind); }
@@ -264,7 +245,7 @@ index 3a9a89d61355..fc2b9a696f64 100644
  } // namespace
  
  /// ------------------------ NoSync Function Attribute -------------------------
-@@ -12064,7 +12064,7 @@ struct AAAddressSpaceCallSiteArgument final : AAAddressSpaceImpl {
+@@ -12884,7 +12884,7 @@ struct AAAllocationInfoCallSiteArgument : AAAllocationInfoImpl {
  };
  } // namespace
  
@@ -273,7 +254,7 @@ index 3a9a89d61355..fc2b9a696f64 100644
  const char AANoSync::ID = 0;
  const char AANoFree::ID = 0;
  const char AANonNull::ID = 0;
-@@ -12191,7 +12191,7 @@ const char AAAddressSpace::ID = 0;
+@@ -13027,7 +13027,7 @@ const char AADenormalFPMath::ID = 0;
      return *AA;                                                                \
    }
  
@@ -283,10 +264,10 @@ index 3a9a89d61355..fc2b9a696f64 100644
  CREATE_FUNCTION_ABSTRACT_ATTRIBUTE_FOR_POSITION(AANoRecurse)
  CREATE_FUNCTION_ABSTRACT_ATTRIBUTE_FOR_POSITION(AAWillReturn)
 diff --git a/llvm/lib/Transforms/IPO/FunctionAttrs.cpp b/llvm/lib/Transforms/IPO/FunctionAttrs.cpp
-index 34299f9dbb23..d4d5a591f1f5 100644
+index 27c411250d53..4f634f2f3164 100644
 --- a/llvm/lib/Transforms/IPO/FunctionAttrs.cpp
 +++ b/llvm/lib/Transforms/IPO/FunctionAttrs.cpp
-@@ -1500,27 +1500,27 @@ static void inferAttrsFromFunctionBodies(const SCCNodeSet &SCCNodes,
+@@ -1590,27 +1590,27 @@ static void inferAttrsFromFunctionBodies(const SCCNodeSet &SCCNodes,
                                           SmallSet<Function *, 8> &Changed) {
    AttributeInferer AI;
  

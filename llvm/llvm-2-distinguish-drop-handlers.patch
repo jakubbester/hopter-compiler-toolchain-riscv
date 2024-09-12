@@ -1,6 +1,6 @@
-From e99ce33a81f715e03f9e5f3b2b05d9bb3e1ba8cf Mon Sep 17 00:00:00 2001
+From 09b1bb355ab16fe462052cc3b449fe9e8db1e8ca Mon Sep 17 00:00:00 2001
 From: Zhiyao Ma <zhiyao.ma.98@gmail.com>
-Date: Thu, 25 Jul 2024 16:52:01 -0400
+Date: Wed, 11 Sep 2024 17:16:31 -0400
 Subject: [PATCH] Distinguish drop handlers when requesting more stack.
 
 ---
@@ -8,12 +8,12 @@ Subject: [PATCH] Distinguish drop handlers when requesting more stack.
  1 file changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/llvm/lib/Target/ARM/ARMFrameLowering.cpp b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
-index dc4079f9055a..e30ca877553f 100644
+index 480de60d9f60..7ad4a39fd017 100644
 --- a/llvm/lib/Target/ARM/ARMFrameLowering.cpp
 +++ b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
-@@ -3405,6 +3405,23 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+@@ -3426,6 +3426,23 @@ void ARMFrameLowering::adjustForSegmentedStacks(
  
- #else
+ # else
  
 +  // By default, the SVC number of `more_stack` is 255.
 +  auto svc_num = 255;
@@ -35,7 +35,7 @@ index dc4079f9055a..e30ca877553f 100644
    // If r12 is live, preserve its original value before using it as the
    // scratch register.
    if (GetMBB->isLiveIn(ARM::R12)) {
-@@ -3523,7 +3540,7 @@ void ARMFrameLowering::adjustForSegmentedStacks(
+@@ -3544,7 +3561,7 @@ void ARMFrameLowering::adjustForSegmentedStacks(
    }
  
    // Otherwise, call SVC
