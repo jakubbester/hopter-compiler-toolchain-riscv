@@ -1,8 +1,8 @@
-This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/ZhiyaoMa98/hopter). The easiest way to get started is to download a prebuilt version from the release page. The rest describes the customization made to the compiler toolchain and the building procedure.
+This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/hopter-project/hopter). The latest patched version is 1.81.0 released on Sep.5th, 2024. The easiest way to get started is to download a prebuilt patched version from the release page. The rest describes the customization made to the compiler toolchain and the building procedure.
 
 # Quick Start
 
-Download the prebuilt Rust compiler toolchain from the [release](https://github.com/ZhiyaoMa98/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL. MacOS users will need to grant execution permission to the downloaded binaries.
+Download the prebuilt Rust compiler toolchain from the [release](https://github.com/hopter-project/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL. MacOS users will need to grant execution permission to the downloaded binaries.
 
 Decompress the downloaded tar file with
 ```
@@ -32,7 +32,7 @@ Here we summarize the modification for each part of the compiler toolchain.
 **`rustc`**
 - Force every Rust function to have the segmented stack function prologue by tagging the `split-stack` attribute to every function during LLVM IR generation. `[naked]` functions are not affected as expected. Also provide the `[no_split_stack]` attribute to supress segmented stack prologue generation for a function.
 - Support deferred forced stack unwinding. Increment a global counter before executing the body of a drop function and decrement the counter after executing the body. The counter is located at a fixed address 0x2000_0004. Invoke the stack unwinder at the end of a drop function if the counter is zero and the unwind pending flag located at 0x2000_0008 is set to true.
-- Never tag `nounwind` attribute to any function during LLVM IR generation.
+- Never tag `nounwind` attribute to any function during LLVM IR generation and prevent performing optimization when calling `nounwind` functions.
 
 **Rust `core` Library**
 - Strip away unnecessary fields in `PanicInfo` so that the panic handling infrastructure can have minimal code storage overhead.
