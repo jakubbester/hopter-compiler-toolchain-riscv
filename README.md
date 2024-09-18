@@ -1,8 +1,8 @@
-This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/hopter-project/hopter). The latest patched version is 1.81.0 released on Sep.5th, 2024. The easiest way to get started is to download a prebuilt patched version from the release page. The rest describes the customization made to the compiler toolchain and the building procedure.
+This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to include additional features to support [Hopter OS](https://github.com/hopter-project/hopter). The latest patched version is 1.81.0 released on Sep.5th, 2024. The easiest way to get started is downloading a prebuilt patched version from the release page. The rest describes the customization made to the compiler toolchain and the building procedure.
 
 # Quick Start
 
-Download the prebuilt Rust compiler toolchain from the [release](https://github.com/hopter-project/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL. MacOS users will need to grant execution permission to the downloaded binaries.
+Download the prebuilt Rust compiler toolchain from the [release](https://github.com/hopter-project/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL.
 
 Decompress the downloaded tar file with
 ```
@@ -16,9 +16,17 @@ Register the downloaded toolchain with `rustup` by running
 rustup toolchain link segstk-rust $RUST_INSTALL_DIR
 ```
 
-And now it is ready to roll.
-
 In case that `rustup` is not installed, follow the [Rust official website](https://www.rust-lang.org/tools/install) to install it.
+
+MacOS users need to sign the downloaded binaries. Run the following commands.
+
+```
+codesign --force --deep --sign - $RUST_INSTALL_DIR/bin/*
+```
+
+MacOS users will also need to grant permissions to the downloaded binaries and libraries upon first-time execution, e.g. `cargo build`. When the pop-up window appears, open the `Settings` app and then the `Privacy & Security` tab. Scroll down to the bottom and grant the permission. This probably needs to be done for a few times.
+
+That's it.
 
 # Compiler Modification
 
