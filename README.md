@@ -4,7 +4,13 @@ This repo contains patches for LLVM, `rustc`, and the `core` library of Rust to 
 
 Download the prebuilt Rust compiler toolchain from the [release](https://github.com/hopter-project/hopter-compiler-toolchain/releases/) page. Currently Linux with x86_64 and MacOS with Apple silicon are supported. Windows users please consider using WSL.
 
-Decompress the downloaded tar file with
+**MacOS users must** download and decompress it through command line tools to avoid putting the binaries into quarantine state, for example using `wget` and `tar`.
+
+```
+wget https://github.com/hopter-project/hopter-compiler-toolchain/releases/download/1.81.0-Patched-2024-09-12/240912-rust-aarch64-macos.tar.xz
+```
+
+Decompress the downloaded compressed file with `tar`. Double check the chosen OS and architecture.
 ```
 tar -xf xxxx.tar.xz
 ```
@@ -16,15 +22,7 @@ Register the downloaded toolchain with `rustup` by running
 rustup toolchain link segstk-rust $RUST_INSTALL_DIR
 ```
 
-In case that `rustup` is not installed, follow the [Rust official website](https://www.rust-lang.org/tools/install) to install it.
-
-MacOS users need to sign the downloaded binaries. Run the following commands.
-
-```
-codesign --force --deep --sign - $RUST_INSTALL_DIR/bin/*
-```
-
-MacOS users will also need to grant permissions to the downloaded binaries and libraries upon first-time execution, e.g. `cargo build`. When the pop-up window appears, open the `Settings` app and then the `Privacy & Security` tab. Scroll down to the bottom and grant the permission. This probably needs to be done for a few times.
+In case `rustup` is not installed, follow the [Rust official website](https://www.rust-lang.org/tools/install) to install it.
 
 That's it.
 
