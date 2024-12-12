@@ -1,0 +1,14 @@
+diff --git a/compiler/rustc_codegen_llvm/src/attributes.rs b/compiler/rustc_codegen_llvm/src/attributes.rs
+index 526f7ed9b98..3319acb442e 100644
+--- a/compiler/rustc_codegen_llvm/src/attributes.rs
++++ b/compiler/rustc_codegen_llvm/src/attributes.rs
+@@ -515,7 +515,8 @@ pub fn from_fn_attrs<'ll, 'tcx>(
+ 
+     // Force segmented stack.
+     if cx.sess().target.llvm_target.contains("thumbv7em-none-eabi")
+-      || cx.sess().target.llvm_target.contains("armv7em-none-eabi") {
++      || cx.sess().target.llvm_target.contains("armv7em-none-eabi")
++      || cx.sess().target.llvm_target.contains("riscv32imc-esp-espidf") {
+         if !codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NO_SPLIT_STACK) {
+             to_add.push(llvm::CreateAttrString(cx.llcx, "split-stack"));
+         }

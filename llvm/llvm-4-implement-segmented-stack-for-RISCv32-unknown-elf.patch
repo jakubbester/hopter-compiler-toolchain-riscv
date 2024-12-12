@@ -1,0 +1,360 @@
+diff --git a/compiler-rt/cmake/Modules/CompilerRTUtils.cmake b/compiler-rt/cmake/Modules/CompilerRTUtils.cmake
+index 25e7823716fc..a5589b7eeca7 100644
+--- a/compiler-rt/cmake/Modules/CompilerRTUtils.cmake
++++ b/compiler-rt/cmake/Modules/CompilerRTUtils.cmake
+@@ -368,6 +368,7 @@ macro(construct_compiler_rt_default_triple)
+           "Default triple for which compiler-rt runtimes will be built.")
+   endif()
+ 
++  message(STATUS "COMPILER_RT_DEFAULT_TARGET_TRIPLE = ${COMPILER_RT_DEFAULT_TARGET_TRIPLE}")
+   string(REPLACE "-" ";" LLVM_TARGET_TRIPLE_LIST ${COMPILER_RT_DEFAULT_TARGET_TRIPLE})
+   list(GET LLVM_TARGET_TRIPLE_LIST 0 COMPILER_RT_DEFAULT_TARGET_ARCH)
+ 
+diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
+index d793c0b7377b..f3bd07baa258 100644
+--- a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
++++ b/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
+@@ -1558,3 +1558,271 @@ bool RISCVFrameLowering::isSupportedStackID(TargetStackID::Value ID) const {
+ TargetStackID::Value RISCVFrameLowering::getStackIDForScalableVectors() const {
+   return TargetStackID::ScalableVector;
+ }
++
++void RISCVFrameLowering::adjustForSegmentedStacks(
++    MachineFunction &MF, MachineBasicBlock &PrologueMBB) const {
++  // Sadly, this currently doesn't support varargs, platforms other than
++  // android/linux. Note that thumb1/thumb2 are support for android/linux.
++  if (MF.getFunction().isVarArg())
++    report_fatal_error("Segmented stacks do not support vararg functions.");
++  // Supress target checking.
++  // if (!ST->isTargetAndroid() && !ST->isTargetLinux())
++  //   report_fatal_error("Segmented stacks not supported on this platform.");
++
++  MachineFrameInfo &MFI = MF.getFrameInfo();
++  const RISCVInstrInfo &TII =
++      *MF.getSubtarget<RISCVSubtarget>().getInstrInfo();
++  RISCVMachineFunctionInfo *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
++  DebugLoc DL;
++
++  // Substitute for the following condition.
++  // When all functions are compiled with segmented stack, we won't
++  // encounter tail call problem. We can safely skip generating the
++  // prologue for functions that don't allocate stack space.
++  if (MFI.getStackSize() == 0)
++    return;
++
++  uint64_t StackSize = MFI.getStackSize();
++  uint64_t AlignedStackSize;
++
++  MachineBasicBlock *PrevStackMBB = MF.CreateMachineBasicBlock();
++  MachineBasicBlock *PostStackMBB = MF.CreateMachineBasicBlock();
++  MachineBasicBlock *AllocMBB = MF.CreateMachineBasicBlock();
++  MachineBasicBlock *GetMBB = MF.CreateMachineBasicBlock();
++  MachineBasicBlock *McrMBB = MF.CreateMachineBasicBlock();
++
++  // Grab everything that reaches PrologueMBB to update there liveness as well.
++  SmallPtrSet<MachineBasicBlock *, 8> BeforePrologueRegion;
++  SmallVector<MachineBasicBlock *, 2> WalkList;
++  WalkList.push_back(&PrologueMBB);
++
++  do {
++    MachineBasicBlock *CurMBB = WalkList.pop_back_val();
++    for (MachineBasicBlock *PredBB : CurMBB->predecessors()) {
++      if (BeforePrologueRegion.insert(PredBB).second)
++        WalkList.push_back(PredBB);
++    }
++  } while (!WalkList.empty());
++
++  // The order in that list is important.
++  // The blocks will all be inserted before PrologueMBB using that order.
++  // Therefore the block that should appear first in the CFG should appear
++  // first in the list.
++  MachineBasicBlock *AddedBlocks[] = {PrevStackMBB, McrMBB, GetMBB, AllocMBB,
++                                      PostStackMBB};
++
++  for (MachineBasicBlock *B : AddedBlocks)
++    BeforePrologueRegion.insert(B);
++
++  for (const auto &LI : PrologueMBB.liveins()) {
++    for (MachineBasicBlock *PredBB : BeforePrologueRegion)
++      PredBB->addLiveIn(LI);
++  }
++
++  // Remove the newly added blocks from the list, since we know
++  // we do not have to do the following updates for them.
++  for (MachineBasicBlock *B : AddedBlocks) {
++    BeforePrologueRegion.erase(B);
++    MF.insert(PrologueMBB.getIterator(), B);
++  }
++
++  for (MachineBasicBlock *MBB : BeforePrologueRegion) {
++    // Make sure the LiveIns are still sorted and unique.
++    MBB->sortUniqueLiveIns();
++    // Replace the edges to PrologueMBB by edges to the sequences
++    // we are about to add, but only update for immediate predecessors.
++    if (MBB->isSuccessor(&PrologueMBB))
++      MBB->ReplaceUsesOfBlockWith(&PrologueMBB, AddedBlocks[0]);
++  }
++
++  Align StackAlign = getStackAlign();
++
++  // The required stack size that is aligned to RISCV constant criterion.
++  AlignedStackSize = alignTo(StackSize, StackAlign);
++
++  // If X7 is live, preserve its original value before using it as the
++  // scratch register.
++  if (GetMBB->isLiveIn(RISCV::X7)) {
++    // ADDI SP, SP, -4   # adjust stack pointer by subtracting 4
++    BuildMI(GetMBB, DL, TII.get(RISCV::ADDI), RISCV::X2)
++      .addReg(RISCV::X2)
++      .addImm(-4);
++
++    // SW T2, 0(SP)   # store value in X7 to memory address at stack pointer
++    BuildMI(GetMBB, DL, TII.get(RISCV::SW), RISCV::X7)
++      .addReg(RISCV::X2)
++      .addImm(0);
++
++    // SAME AS :   STR R12, [SP, #-4]!   (ARM)
++  }
++
++  // LUI T2, 0x40000   # move the immediate value 0x40000000 into X7 register
++  //                   # by loading upper 20 bits and setting the rest to zero
++  //
++  // SAME AS :   MOV R12 0x20000000   (ARM)
++  BuildMI(GetMBB, DL, TII.get(RISCV::LUI), RISCV::X7)
++    .addImm(0x40000);
++
++  // LW T2, 0(T2)   # load the value from the address in X7 into X7
++  //                # SAME AS :   LDR R12, [R12]   (ARM)
++  BuildMI(GetMBB, DL, TII.get(RISCV::LW), RISCV::X7)
++    .addReg(RISCV::X7)
++    .addImm(0);
++
++  // SUB T2, SP, T2   # T2 = SP - T2 and T2 now holds the remaining stacklet
++  //                  # space
++  //
++  // SAME AS :   SUB R12, SP, R12   (ARM)
++  BuildMI(GetMBB, DL, TII.get(RISCV::SUB), RISCV::X7)
++      .addReg(RISCV::X2)
++      .addReg(RISCV::X7);
++
++  if (AlignedStackSize < 1024) {
++    // STACK_SIZE < 1024 AND is MULTIPLE of 4
++
++    // BGE T2, #func_stack_size, PostStackMBB   # conditional jump to position
++    //
++    // SAME AS :   CMP R12, #func_stack_size   (ARM)
++    //             BGE PostStackMBB            (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::SLTI), RISCV::X7)
++      .addReg(RISCV::X7)
++      .addImm(AlignedStackSize);
++
++    // This jump is taken when the remaining space is greater than or equal to
++    // the requested size.
++
++    // BGE T2, #func_stack_size, PostStackMBB   # conditional jump to position
++    //
++    // SAME AS :   CMP R12, #func_stack_size   (ARM)
++    //             BGE PostStackMBB            (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::BGE))
++      .addReg(RISCV::X7)
++      .addReg(RISCV::X0)
++      .addMBB(PostStackMBB);
++
++  } else if (AlignedStackSize < 4096) {
++    // ADDI T2, T2, -AlignedStackSize   # T2 = T2 + -AlignedStackSize
++    //
++    // SAME AS :   SUB R12, R12, AlignedStackSize   (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::ADDI), RISCV::X7)
++        .addReg(RISCV::X7)
++        .addImm(-AlignedStackSize);
++
++    // STACK_SIZE < 1024 AND is MULTIPLE of 4
++
++    // BGE T2, #func_stack_size, PostStackMBB   # conditional jump to position
++    //
++    // SAME AS :   CMP R12, #func_stack_size   (ARM)
++    //             BGE PostStackMBB            (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::SLTI), RISCV::X7)
++      .addReg(RISCV::X7)
++      .addImm(AlignedStackSize);
++
++    // This jump is taken when the remaining space is greater than or equal to
++    // the requested size.
++    
++    // BGE T2, #func_stack_size, PostStackMBB   # conditional jump to position
++    //
++    // SAME AS :   CMP R12, #func_stack_size   (ARM)
++    //             BGE PostStackMBB            (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::BGE))
++      .addReg(RISCV::X7)
++      .addImm(AlignedStackSize)
++      .addMBB(PostStackMBB);
++
++  } else if (AlignedStackSize < 65536) {
++    uint64_t bits7_0 = AlignedStackSize & 0xff;
++    uint64_t bits15_8 = AlignedStackSize & 0xff00;
++
++    BuildMI(GetMBB, DL, TII.get(RISCV::ADDI), RISCV::X7)
++        .addReg(RISCV::X7)
++        .addImm(-bits7_0);
++
++    BuildMI(GetMBB, DL, TII.get(RISCV::ADDI), RISCV::X7)
++        .addReg(RISCV::X7)
++        .addImm(-bits15_8);
++
++    // BGE T2, #func_stack_size, PostStackMBB   # conditional jump to position
++    //
++    // SAME AS :   CMP R12, #func_stack_size   (ARM)
++    //             BGE PostStackMBB            (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::SLTI), RISCV::X7)
++      .addReg(RISCV::X7)
++      .addImm(AlignedStackSize);
++
++    // This jump is taken when the remaining space is greater than or equal to
++    // the requested size.
++
++    // BGE T2, #func_stack_size, PostStackMBB   # conditional jump to position
++    //
++    // SAME AS :   CMP R12, #func_stack_size   (ARM)
++    //             BGE PostStackMBB            (ARM)
++    BuildMI(GetMBB, DL, TII.get(RISCV::BGE))
++      .addReg(RISCV::X7)
++      .addImm(AlignedStackSize)
++      .addMBB(PostStackMBB);
++
++  } else
++    report_fatal_error("Segmented stacks function frame too large.");
++
++  // Otherwise, call ECALL
++  auto EcallNum = 255;
++  // Set a value of 255 to the T2 register for the ECALL to consume.
++  BuildMI(AllocMBB, DL, TII.get(RISCV::ADDI), RISCV::X7)
++    .addReg(RISCV::X0)
++    .addImm(EcallNum);
++
++  BuildMI(AllocMBB, DL, TII.get(RISCV::ECALL));
++
++  // Restore X7 if previously preserved.
++  if (GetMBB->isLiveIn(RISCV::X7)) {
++    // LW T2, 0(SP)   # load value from memory at address of stack pointer
++    //                # into the X7 register
++    BuildMI(GetMBB, DL, TII.get(RISCV::LW), RISCV::X7)
++      .addReg(RISCV::X7)
++      .addReg(RISCV::X2)
++      .addImm(4);
++
++    // ADDI SP, SP, 4   # increment the stack pointer by adding 4
++    BuildMI(GetMBB, DL, TII.get(RISCV::ADDI), RISCV::X2)
++      .addReg(RISCV::X2)
++      .addImm(4);
++
++    // SAME AS :   LDR R12, [SP], #4   (ARM)
++  }
++
++  assert(AlignedStackSize < 65536);
++  assert(AlignedStackSize % 4 == 0);
++  assert(RVFI->getArgumentStackSize() < 65536);
++  assert(RVFI->getArgumentStackSize() % 4 == 0);
++
++  uint32_t StackWordCnt = AlignedStackSize / 4;
++  uint32_t StackArgWordCnt = RVFI->getArgumentStackSize() / 4;
++
++  // Push constant literal in the instruction stream for ECALL handler to
++  // consume. Constant literal (32 bits): stackWordCnt (16 bits) |
++  // stackArgWordCnt (16 bits)
++
++  // .half StackWordCnt   # first parameter - upper 16-bits
++  BuildMI(AllocMBB, DL, TII.get(RISCV::halfConst16))
++    .addImm(StackWordCnt);
++
++  // .half StackArgWordCnt   # second parameter - lower 16-bits
++  BuildMI(AllocMBB, DL, TII.get(RISCV::halfConst16))
++    .addImm(StackArgWordCnt);
++
++  PostStackMBB->addSuccessor(&PrologueMBB);
++
++  AllocMBB->addSuccessor(PostStackMBB);
++
++  GetMBB->addSuccessor(PostStackMBB);
++  GetMBB->addSuccessor(AllocMBB);
++
++  McrMBB->addSuccessor(GetMBB);
++
++  PrevStackMBB->addSuccessor(McrMBB);
++
++  #ifdef EXPENSIVE_CHECKS
++    MF.verify()
++  #endif
++}
+diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.h b/llvm/lib/Target/RISCV/RISCVFrameLowering.h
+index 5c1c7317d24b..c714c9d1836a 100644
+--- a/llvm/lib/Target/RISCV/RISCVFrameLowering.h
++++ b/llvm/lib/Target/RISCV/RISCVFrameLowering.h
+@@ -37,6 +37,9 @@ public:
+   void processFunctionBeforeFrameFinalized(MachineFunction &MF,
+                                            RegScavenger *RS) const override;
+ 
++  void adjustForSegmentedStacks(MachineFunction &MF,
++                                MachineBasicBlock &MBB) const override;
++
+   bool hasFP(const MachineFunction &MF) const override;
+ 
+   bool hasBP(const MachineFunction &MF) const;
+diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+index 3fe7ddfdd427..85e0be06f020 100644
+--- a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
++++ b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+@@ -18230,6 +18230,10 @@ SDValue RISCVTargetLowering::LowerFormalArguments(
+     RVFI->setVarArgsSaveSize(VarArgsSaveSize);
+   }
+ 
++  RISCVMachineFunctionInfo *RVFI = MF.getInfo<RISCVMachineFunctionInfo>();
++  unsigned StackArgSize = CCInfo.getStackSize();
++  RVFI->setArgumentStackSize(StackArgSize);
++
+   // All stores are grouped in one node to allow the matching between
+   // the size of Ins and InVals. This only happens for vararg functions.
+   if (!OutChains.empty()) {
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfo.td b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+index 114329c2c7c5..b22974ffb060 100644
+--- a/llvm/lib/Target/RISCV/RISCVInstrInfo.td
++++ b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+@@ -1063,6 +1063,13 @@ let Predicates = [HasStdExtZicfilp] in {
+ def : InstAlias<"lpad $imm20", (AUIPC X0, uimm20:$imm20)>;
+ }
+ 
++def imm16b : Operand<i16>, ImmLeaf<i16, [{
++  return Imm >= 0 && Imm <= 0xFFFF;
++}]> {}
++
++let hasNoSchedulingInfo = 1, hasSideEffects = 0, mayStore = 0, mayLoad = 0 in
++def halfConst16 : Pseudo<(outs), (ins imm16b:$imm), [], ".half\t$imm">;
++
+ //===----------------------------------------------------------------------===//
+ // .insn directive instructions
+ //===----------------------------------------------------------------------===//
+diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
+index fcc20c17c6b4..634774979990 100644
+--- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
++++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
+@@ -68,6 +68,10 @@ private:
+   /// Is there any vector argument or return?
+   bool IsVectorCall = false;
+ 
++  /// ArgumentStackSize - amount of bytes on stack consumed by the arguments
++  /// being passed on the stack
++  unsigned ArgumentStackSize = 0;
++
+   /// Registers that have been sign extended from i32.
+   SmallVector<Register, 8> SExt32Registers;
+ 
+@@ -157,6 +161,9 @@ public:
+ 
+   bool isVectorCall() const { return IsVectorCall; }
+   void setIsVectorCall() { IsVectorCall = true; }
++
++  unsigned getArgumentStackSize() const { return ArgumentStackSize; }
++  void setArgumentStackSize(unsigned size) { ArgumentStackSize = size; }
+ };
+ 
+ } // end namespace llvm
